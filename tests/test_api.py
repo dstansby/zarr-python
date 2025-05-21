@@ -1301,3 +1301,23 @@ def test_no_overwrite_load(tmp_path: Path) -> None:
     with contextlib.suppress(NotImplementedError):
         zarr.load(store)
     assert existing_fpath.exists()
+
+
+def test_order_warning() -> None:
+    # Passing order shouldn't warn for v2
+    zarr.create(
+        (1,),
+        store={},
+        order="F",
+        zarr_format=2,
+    )
+    # Passing order should warn for v3
+    with pytest.warns(
+        RuntimeWarning, match="The `order` keyword argument has no effect for Zarr format 3 arrays"
+    ):
+        zarr.create(
+            (1,),
+            store={},
+            order="F",
+            zarr_format=3,
+        )
