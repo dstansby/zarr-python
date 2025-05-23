@@ -584,6 +584,15 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             _chunks = normalize_chunks(chunks, shape, dtype_parsed.itemsize)
         else:
             _chunks = normalize_chunks(chunk_shape, shape, dtype_parsed.itemsize)
+
+        if order is not None and config is not None:
+            msg = (
+                "Both order and config keyword arguments are set. "
+                "This is redundant. When both are set, order will be ignored and "
+                "config will be used."
+            )
+            warnings.warn(UserWarning(msg), stacklevel=1)
+
         config_parsed = parse_array_config(config)
 
         result: AsyncArray[ArrayV3Metadata] | AsyncArray[ArrayV2Metadata]

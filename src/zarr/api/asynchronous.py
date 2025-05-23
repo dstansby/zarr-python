@@ -17,7 +17,7 @@ from zarr.core.array import (
     from_array,
     get_array_metadata,
 )
-from zarr.core.array_spec import ArrayConfig, ArrayConfigLike, ArrayConfigParams
+from zarr.core.array_spec import ArrayConfigLike, ArrayConfigParams
 from zarr.core.buffer import NDArrayLike
 from zarr.core.common import (
     JSON,
@@ -1039,15 +1039,6 @@ async def create(
             )
             warnings.warn(UserWarning(msg), stacklevel=1)
         config_dict["write_empty_chunks"] = write_empty_chunks
-    if order is not None and config is not None:
-        msg = (
-            "Both order and config keyword arguments are set. "
-            "This is redundant. When both are set, order will be ignored and "
-            "config will be used."
-        )
-        warnings.warn(UserWarning(msg), stacklevel=1)
-
-    config_parsed = ArrayConfig.from_dict(config_dict)
 
     return await AsyncArray._create(
         store_path,
@@ -1066,7 +1057,7 @@ async def create(
         codecs=codecs,
         dimension_names=dimension_names,
         attributes=attributes,
-        config=config_parsed,
+        config=config,
         **kwargs,
     )
 
