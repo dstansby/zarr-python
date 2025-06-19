@@ -29,6 +29,7 @@ class ArrayConfigParams(TypedDict):
 
     order: NotRequired[MemoryOrder]
     write_empty_chunks: NotRequired[bool]
+    read_only: NotRequired[bool]
 
 
 @dataclass(frozen=True)
@@ -42,17 +43,22 @@ class ArrayConfig:
         The memory layout of the arrays returned when reading data from the store.
     write_empty_chunks : bool
         If True, empty chunks will be written to the store.
+    read_only : bool
+        If True, writing is not permitted.
     """
 
     order: MemoryOrder
     write_empty_chunks: bool
+    read_only: bool
 
-    def __init__(self, order: MemoryOrder, write_empty_chunks: bool) -> None:
+    def __init__(self, order: MemoryOrder, write_empty_chunks: bool, read_only: bool) -> None:
         order_parsed = parse_order(order)
         write_empty_chunks_parsed = parse_bool(write_empty_chunks)
+        read_only_parsed = parse_bool(read_only)
 
         object.__setattr__(self, "order", order_parsed)
         object.__setattr__(self, "write_empty_chunks", write_empty_chunks_parsed)
+        object.__setattr__(self, "read_only", read_only_parsed)
 
     @classmethod
     def from_dict(cls, data: ArrayConfigParams) -> Self:
@@ -63,7 +69,7 @@ class ArrayConfig:
         """
         kwargs_out: ArrayConfigParams = {}
         for f in fields(ArrayConfig):
-            field_name = cast("Literal['order', 'write_empty_chunks']", f.name)
+            field_name = cast("Literal['order', 'write_empty_chunks', 'read_only']", f.name)
             if field_name not in data:
                 kwargs_out[field_name] = zarr_config.get(f"array.{field_name}")
             else:

@@ -146,16 +146,13 @@ async def test_open_array(memory_store: MemoryStore, zarr_format: ZarrFormat) ->
     assert z.shape == (100,)
 
     # open array, overwrite
-    # store._store_dict = {}
     store = MemoryStore()
     z = zarr.api.synchronous.open(store=store, shape=200, zarr_format=zarr_format)
     assert isinstance(z, Array)
     assert z.shape == (200,)
 
     # open array, read-only
-    store_cls = type(store)
-    ro_store = await store_cls.open(store_dict=store._store_dict, read_only=True)
-    z = zarr.api.synchronous.open(store=ro_store, mode="r")
+    z = zarr.api.synchronous.open(store=store, mode="r")
     assert isinstance(z, Array)
     assert z.shape == (200,)
     assert z.read_only
@@ -199,9 +196,7 @@ async def test_open_group(memory_store: MemoryStore) -> None:
     assert "foo" not in g
 
     # open group, read-only
-    store_cls = type(store)
-    ro_store = await store_cls.open(store_dict=store._store_dict, read_only=True)
-    g = open_group(store=ro_store, mode="r")
+    g = open_group(store=store, mode="r")
     assert isinstance(g, Group)
     assert g.read_only
 
@@ -213,8 +208,8 @@ async def test_open_group_unspecified_version(
     """Regression test for https://github.com/zarr-developers/zarr-python/issues/2175"""
 
     # create a group with specified zarr format (could be 2, 3, or None)
-    _ = await zarr.api.asynchronous.open_group(
-        store=str(tmpdir), mode="w", zarr_format=zarr_format, attributes={"foo": "bar"}
+    _ = await zarr.api.asynchronous.create_group(
+        store=str(tmpdir), zarr_format=zarr_format, attributes={"foo": "bar"}
     )
 
     # now open that group without specifying the format
@@ -264,7 +259,9 @@ def test_save_errors() -> None:
     with pytest.raises(ValueError):
         # no arrays provided
         save("data/group.zarr")
-    with pytest.raises(TypeError):
+    with pytest.raises(
+        TypeError, match="Keyword argument 'mode' must be a numpy or other NDArrayLike array"
+    ):
         # mode is no valid argument and would get handled as an array
         a = np.arange(10)
         zarr.save("data/example.zarr", a, mode="w")
@@ -272,26 +269,30 @@ def test_save_errors() -> None:
 
 def test_open_with_mode_r(tmp_path: pathlib.Path) -> None:
     # 'r' means read only (must exist)
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="No group found in store"):
         zarr.open(store=tmp_path, mode="r")
     z1 = zarr.ones(store=tmp_path, shape=(3, 3))
     assert z1.fill_value == 1
     z2 = zarr.open(store=tmp_path, mode="r")
+    assert z2.read_only
+    assert z2.store.read_only
     assert isinstance(z2, Array)
     assert z2.fill_value == 1
     result = z2[:]
     assert isinstance(result, NDArrayLike)
     assert (result == 1).all()
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeError):
         z2[:] = 3
 
 
 def test_open_with_mode_r_plus(tmp_path: pathlib.Path) -> None:
     # 'r+' means read/write (must exist)
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="No group found in store"):
         zarr.open(store=tmp_path, mode="r+")
     zarr.ones(store=tmp_path, shape=(3, 3))
     z2 = zarr.open(store=tmp_path, mode="r+")
+    assert not z2.read_only
+    assert not z2.store.read_only
     assert isinstance(z2, Array)
     result = z2[:]
     assert isinstance(result, NDArrayLike)
@@ -303,14 +304,20 @@ async def test_open_with_mode_a(tmp_path: pathlib.Path) -> None:
     # Open without shape argument should default to group
     g = zarr.open(store=tmp_path, mode="a")
     assert isinstance(g, Group)
+    assert not g.read_only
+    assert not g.store.read_only
     await g.store_path.delete()
 
     # 'a' means read/write (create if doesn't exist)
     arr = zarr.open(store=tmp_path, mode="a", shape=(3, 3))
     assert isinstance(arr, Array)
+    assert not arr.read_only
+    assert not arr.store.read_only
     arr[...] = 1
     z2 = zarr.open(store=tmp_path, mode="a")
     assert isinstance(z2, Array)
+    assert not arr.read_only
+    assert not arr.store.read_only
     result = z2[:]
     assert isinstance(result, NDArrayLike)
     assert (result == 1).all()
@@ -321,10 +328,14 @@ def test_open_with_mode_w(tmp_path: pathlib.Path) -> None:
     # 'w' means create (overwrite if exists);
     arr = zarr.open(store=tmp_path, mode="w", shape=(3, 3))
     assert isinstance(arr, Array)
+    assert not arr.read_only
+    assert not arr.store.read_only
 
     arr[...] = 3
     z2 = zarr.open(store=tmp_path, mode="w", shape=(3, 3))
     assert isinstance(z2, Array)
+    assert not arr.read_only
+    assert not arr.store.read_only
     result = z2[:]
     assert isinstance(result, NDArrayLike)
     assert not (result == 3).all()
@@ -332,11 +343,13 @@ def test_open_with_mode_w(tmp_path: pathlib.Path) -> None:
 
 
 def test_open_with_mode_w_minus(tmp_path: pathlib.Path) -> None:
-    # 'w-' means create  (fail if exists)
+    # 'w-' means create (fail if exists)
     arr = zarr.open(store=tmp_path, mode="w-", shape=(3, 3))
     assert isinstance(arr, Array)
+    assert not arr.read_only
+    assert not arr.store.read_only
     arr[...] = 1
-    with pytest.raises(FileExistsError):
+    with pytest.raises(FileExistsError, match="is not empty, but `mode` is set to 'w-'"):
         zarr.open(store=tmp_path, mode="w-")
 
 
@@ -1176,7 +1189,7 @@ def test_open_modes_creates_group(tmp_path: pathlib.Path, mode: str) -> None:
     zarr_dir = tmp_path / f"mode-{mode}-test.zarr"
     if mode in ["r", "r+"]:
         # Expect FileNotFoundError to be raised if 'r' or 'r+' mode
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError, match="No group found in store"):
             zarr.open(store=zarr_dir, mode=mode)
     else:
         group = zarr.open(store=zarr_dir, mode=mode)
@@ -1209,6 +1222,8 @@ def test_open_array_with_mode_r_plus(store: Store, zarr_format: ZarrFormat) -> N
     zarr.ones(store=store, shape=(3, 3), zarr_format=zarr_format)
     z2 = zarr.open_array(store=store, mode="r+")
     assert isinstance(z2, Array)
+    assert not z2.read_only
+    assert not z2.store.read_only
     assert z2.metadata.zarr_format == zarr_format
     result = z2[:]
     assert isinstance(result, NDArrayLike)
@@ -1314,6 +1329,7 @@ def test_no_overwrite_group(tmp_path: Path, create_function: Callable, overwrite
 @pytest.mark.parametrize("open_func", [zarr.open, open_group])
 @pytest.mark.parametrize("mode", ["r", "r+", "a", "w", "w-"])
 def test_no_overwrite_open(tmp_path: Path, open_func: Callable, mode: str) -> None:  # type:ignore[type-arg]
+    # Check that opening a non-existent store doesn't delete any existing files
     store = zarr.storage.LocalStore(tmp_path)
     existing_fpath = add_empty_file(tmp_path)
 

@@ -60,6 +60,7 @@ def test_config_defaults_set() -> None:
                 "array": {
                     "order": "C",
                     "write_empty_chunks": False,
+                    "read_only": False,
                     "v2_default_compressor": {
                         "default": {"id": "zstd", "level": 0, "checksum": False},
                         "variable-length-string": {"id": "zstd", "level": 0, "checksum": False},
@@ -82,6 +83,7 @@ def test_config_defaults_set() -> None:
                         ],
                     },
                 },
+                "group": {"read_only": False},
                 "async": {"concurrency": 10, "timeout": None},
                 "threading": {"max_workers": None},
                 "json_indent": 2,

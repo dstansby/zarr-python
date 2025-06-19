@@ -85,9 +85,7 @@ class StorePath:
             return self
 
         if store.read_only and mode != "r":
-            raise ValueError(f"Store is read-only but mode is '{mode}'")
-        if not store.read_only and mode == "r":
-            raise ValueError(f"Store is not read-only but mode is '{mode}'")
+            raise ValueError(f"Store is read-only but requested mode is '{mode}'")
 
         match mode:
             case "w-":
@@ -276,7 +274,7 @@ async def make_store_path(
         default path is the empty string.
     mode : StoreAccessMode | None, optional
         The mode to use when creating the `StorePath` object.  If None, the
-        default mode is 'r'.
+        default mode is 'a'.
     storage_options : dict[str, Any] | None, optional
         The storage options to use when creating the `RemoteStore` object.  If
         None, the default storage options are used.

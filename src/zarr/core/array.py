@@ -579,6 +579,9 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         See :func:`AsyncArray.create` for more details.
         Deprecated in favor of :func:`zarr.api.asynchronous.create_array`.
         """
+        config_parsed = parse_array_config(config)
+        if config_parsed.read_only:
+            raise ValueError("Cannot create a new array with config.read_only = True")
 
         dtype_parsed = parse_data_type(dtype, zarr_format=zarr_format)
         store_path = await make_store_path(store)
@@ -594,7 +597,6 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             _chunks = normalize_chunks(chunks, shape, item_size)
         else:
             _chunks = normalize_chunks(chunk_shape, shape, item_size)
-        config_parsed = parse_array_config(config)
 
         result: AsyncArray[ArrayV3Metadata] | AsyncArray[ArrayV2Metadata]
         if zarr_format == 3:
@@ -849,9 +851,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
 
     @classmethod
     def from_dict(
-        cls,
-        store_path: StorePath,
-        data: dict[str, JSON],
+        cls, store_path: StorePath, data: dict[str, JSON], config: ArrayConfigLike | None = None
     ) -> AsyncArray[ArrayV3Metadata] | AsyncArray[ArrayV2Metadata]:
         """
         Create a Zarr array from a dictionary, with support for both Zarr format 2 and 3 metadata.
@@ -877,13 +877,14 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             If the dictionary data is invalid or incompatible with either Zarr format 2 or 3 array creation.
         """
         metadata = parse_array_metadata(data)
-        return cls(metadata=metadata, store_path=store_path)
+        return cls(metadata=metadata, store_path=store_path, config=config)
 
     @classmethod
     async def open(
         cls,
         store: StoreLike,
         zarr_format: ZarrFormat | None = 3,
+        config: ArrayConfigLike | None = None,
     ) -> AsyncArray[ArrayV3Metadata] | AsyncArray[ArrayV2Metadata]:
         """
         Async method to open an existing Zarr array from a given store.
@@ -911,7 +912,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         metadata_dict = await get_array_metadata(store_path, zarr_format=zarr_format)
         # TODO: remove this cast when we have better type hints
         _metadata_dict = cast("ArrayV3MetadataDict", metadata_dict)
-        return cls(store_path=store_path, metadata=_metadata_dict)
+        return cls(store_path=store_path, metadata=_metadata_dict, config=config)
 
     @property
     def store(self) -> Store:
@@ -1093,7 +1094,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             True if the array is read-only
         """
         # Backwards compatibility for 2.x
-        return self.store_path.read_only
+        return self._config.read_only
 
     @property
     def path(self) -> str:
@@ -1155,6 +1156,10 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             The total number of chunks in the array.
         """
         return product(self.cdata_shape)
+
+    def _check_can_write(self) -> None:
+        if self.read_only:
+            raise RuntimeError("Array is read-only")
 
     async def nchunks_initialized(self) -> int:
         """
@@ -1379,6 +1384,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         """
         Asynchronously save the array metadata.
         """
+        self._check_can_write()
         to_save = metadata.to_buffer_dict(cpu_buffer_prototype)
         awaitables = [set_or_delete(self.store_path / key, value) for key, value in to_save.items()]
 
@@ -1406,6 +1412,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         prototype: BufferPrototype,
         fields: Fields | None = None,
     ) -> None:
+        self._check_can_write()
         # check fields are sensible
         check_fields(fields, self.dtype)
         fields = check_no_multi_fields(fields)
@@ -1497,6 +1504,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         - This method is asynchronous and should be awaited.
         - Supports basic indexing, where the selection is contiguous and does not involve advanced indexing.
         """
+        self._check_can_write()
         if prototype is None:
             prototype = default_buffer_prototype()
         indexer = BasicIndexer(
@@ -1533,6 +1541,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         -----
         - This method is asynchronous and should be awaited.
         """
+        self._check_can_write()
         new_shape = parse_shapelike(new_shape)
         assert len(new_shape) == len(self.metadata.shape)
         new_metadata = self.metadata.update_shape(new_shape)
@@ -1579,6 +1588,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         The size of all dimensions other than `axis` must match between this
         array and `data`.
         """
+        self._check_can_write()
         # ensure data is array-like
         if not hasattr(data, "shape"):
             data = np.asanyarray(data)
@@ -1640,6 +1650,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         - The updated attributes will be merged with existing attributes, and any conflicts will be
           overwritten by the new values.
         """
+        self._check_can_write()
         self.metadata.attributes.update(new_attributes)
 
         # Write new metadata
@@ -1933,6 +1944,7 @@ class Array:
         cls,
         store_path: StorePath,
         data: dict[str, JSON],
+        config: ArrayConfigLike | None = None,
     ) -> Array:
         """
         Create a Zarr array from a dictionary.
@@ -1956,14 +1968,11 @@ class Array:
         ValueError
             If the dictionary data is invalid or missing required fields for array creation.
         """
-        async_array = AsyncArray.from_dict(store_path=store_path, data=data)
+        async_array = AsyncArray.from_dict(store_path=store_path, data=data, config=config)
         return cls(async_array)
 
     @classmethod
-    def open(
-        cls,
-        store: StoreLike,
-    ) -> Array:
+    def open(cls, store: StoreLike, config: ArrayConfigLike | None = None) -> Array:
         """Opens an existing Array from a store.
 
         Parameters
@@ -1976,7 +1985,7 @@ class Array:
         Array
             Array opened from the store.
         """
-        async_array = sync(AsyncArray.open(store))
+        async_array = sync(AsyncArray.open(store, config=config))
         return cls(async_array)
 
     @property
@@ -2160,6 +2169,9 @@ class Array:
         The number of chunks in the stored representation of this array.
         """
         return self._async_array.nchunks
+
+    def _check_can_write(self) -> None:
+        self._async_array._check_can_write()
 
     def _iter_chunk_coords(
         self, origin: Sequence[int] | None = None, selection_shape: Sequence[int] | None = None
@@ -2546,6 +2558,7 @@ class Array:
         vindex, oindex, blocks, __getitem__
 
         """
+        self._check_can_write()
         fields, pure_selection = pop_fields(selection)
         if is_pure_fancy_indexing(pure_selection, self.ndim):
             self.vindex[cast("CoordinateSelection | MaskSelection", selection)] = value
@@ -2769,6 +2782,7 @@ class Array:
         vindex, oindex, blocks, __getitem__, __setitem__
 
         """
+        self._check_can_write()
         if prototype is None:
             prototype = default_buffer_prototype()
         indexer = BasicIndexer(selection, self.shape, self.metadata.chunk_grid)
@@ -3003,6 +3017,7 @@ class Array:
         vindex, oindex, blocks, __getitem__, __setitem__
 
         """
+        self._check_can_write()
         if prototype is None:
             prototype = default_buffer_prototype()
         indexer = OrthogonalIndexer(selection, self.shape, self.metadata.chunk_grid)
@@ -3167,6 +3182,7 @@ class Array:
         vindex, oindex, blocks, __getitem__, __setitem__
 
         """
+        self._check_can_write()
         if prototype is None:
             prototype = default_buffer_prototype()
         indexer = MaskIndexer(mask, self.shape, self.metadata.chunk_grid)
@@ -3333,6 +3349,7 @@ class Array:
         vindex, oindex, blocks, __getitem__, __setitem__
 
         """
+        self._check_can_write()
         if prototype is None:
             prototype = default_buffer_prototype()
         # setup indexer
@@ -3544,6 +3561,7 @@ class Array:
         vindex, oindex, blocks, __getitem__, __setitem__
 
         """
+        self._check_can_write()
         if prototype is None:
             prototype = default_buffer_prototype()
         indexer = BlockIndexer(selection, self.shape, self.metadata.chunk_grid)
@@ -3604,6 +3622,7 @@ class Array:
         >>> z2.shape
         (50, 50)
         """
+        self._check_can_write()
         sync(self._async_array.resize(new_shape))
 
     def append(self, data: npt.ArrayLike, axis: int = 0) -> ChunkCoords:
@@ -3640,6 +3659,7 @@ class Array:
         >>> z.shape
         (20000, 2000)
         """
+        self._check_can_write()
         return sync(self._async_array.append(data, axis=axis))
 
     def update_attributes(self, new_attributes: dict[str, JSON]) -> Array:
@@ -3667,6 +3687,7 @@ class Array:
         - The updated attributes will be merged with existing attributes, and any conflicts will be
           overwritten by the new values.
         """
+        self._check_can_write()
         # TODO: remove this cast when type inference improves
         new_array = sync(self._async_array.update_attributes(new_attributes))
         # TODO: remove this cast when type inference improves
@@ -4011,9 +4032,8 @@ async def from_array(
         >>> await arr5.getitem(...)
         array([[0, 0],[0, 0]])
     """
-    mode: Literal["a"] = "a"
     config_parsed = parse_array_config(config)
-    store_path = await make_store_path(store, path=name, mode=mode, storage_options=storage_options)
+    store_path = await make_store_path(store, path=name, mode="a", storage_options=storage_options)
 
     (
         chunks,

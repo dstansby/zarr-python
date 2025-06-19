@@ -699,7 +699,7 @@ class ShardingCodec(
             dtype=UInt64(endianness="little"),
             fill_value=MAX_UINT_64,
             config=ArrayConfig(
-                order="C", write_empty_chunks=False
+                order="C", write_empty_chunks=False, read_only=False
             ),  # Note: this is hard-coded for simplicity -- it is not surfaced into user code,
             prototype=default_buffer_prototype(),
         )

@@ -486,7 +486,11 @@ class TestConsolidated:
             b'{"metadata":{".zgroup":{"zarr_format":2}},"zarr_consolidated_format":1}'
         )
         return AsyncGroup._from_bytes_v2(
-            None, zgroup_bytes, zattrs_bytes=None, consolidated_metadata_bytes=zmetadata_bytes
+            None,
+            zgroup_bytes,
+            zattrs_bytes=None,
+            consolidated_metadata_bytes=zmetadata_bytes,
+            config=None,
         )
 
     async def test_consolidated_metadata_backwards_compatibility(

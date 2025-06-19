@@ -87,6 +87,7 @@ config = Config(
             "array": {
                 "order": "C",
                 "write_empty_chunks": False,
+                "read_only": False,
                 "v2_default_compressor": {
                     "default": {"id": "zstd", "level": 0, "checksum": False},
                     "variable-length-string": {"id": "zstd", "level": 0, "checksum": False},
@@ -109,6 +110,7 @@ config = Config(
                     ],
                 },
             },
+            "group": {"read_only": False},
             "async": {"concurrency": 10, "timeout": None},
             "threading": {"max_workers": None},
             "json_indent": 2,

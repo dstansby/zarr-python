@@ -8,7 +8,17 @@ import warnings
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field, fields, replace
 from itertools import accumulate
-from typing import TYPE_CHECKING, Literal, TypeVar, assert_never, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+    NotRequired,
+    Self,
+    TypedDict,
+    TypeVar,
+    assert_never,
+    cast,
+    overload,
+)
 
 import numpy as np
 import numpy.typing as npt
@@ -45,9 +55,11 @@ from zarr.core.common import (
     NodeType,
     ShapeLike,
     ZarrFormat,
+    parse_bool,
     parse_shapelike,
 )
 from zarr.core.config import config
+from zarr.core.config import config as zarr_config
 from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
 from zarr.core.sync import SyncMixin, sync
 from zarr.errors import ContainsArrayError, ContainsGroupError, MetadataValidationError
@@ -425,17 +437,95 @@ class ImplicitGroupMarker(GroupMetadata):
     """
 
 
+class GroupConfigParams(TypedDict):
+    """
+    A TypedDict model of the attributes of an GroupConfig class, but with no required fields.
+    This allows for partial construction of an GroupConfig, with the assumption that the unset
+    keys will be taken from a global configuration.
+    """
+
+    read_only: NotRequired[bool]
+
+
+@dataclass(frozen=True)
+class GroupConfig:
+    """
+    A model for the runtime configuration of a group.
+
+    Parameters
+    ----------
+    read_only : bool
+        If True, writing is not permitted.
+    """
+
+    read_only: bool
+
+    def __init__(self, read_only: bool) -> None:
+        read_only_parsed = parse_bool(read_only)
+
+        object.__setattr__(self, "read_only", read_only_parsed)
+
+    @classmethod
+    def from_dict(cls, data: GroupConfigParams) -> Self:
+        """
+        Create an ArrayConfig from a dict. The keys of that dict are a subset of the
+        attributes of the ArrayConfig class. Any keys missing from that dict will be set to the
+        the values in the ``array`` namespace of ``zarr.config``.
+        """
+        kwargs_out: GroupConfigParams = {}
+        for f in fields(GroupConfig):
+            field_name = cast("Literal['read_only']", f.name)
+            if field_name not in data:
+                kwargs_out[field_name] = zarr_config.get(f"array.{field_name}")
+            else:
+                kwargs_out[field_name] = data[field_name]
+        return cls(**kwargs_out)
+
+
+GroupConfigLike = GroupConfig | GroupConfigParams
+
+
+def parse_group_config(data: GroupConfigLike | None) -> GroupConfig:
+    """
+    Convert various types of data to an ArrayConfig.
+    """
+    if data is None:
+        return GroupConfig.from_dict({})
+    elif isinstance(data, GroupConfig):
+        return data
+    else:
+        return GroupConfig.from_dict(data)
+
+
 @dataclass(frozen=True)
 class AsyncGroup:
     """
     Asynchronous Group object.
+
+    Attributes
+    ----------
+    _config : GroupConfig
+        The runtime configuration of the group.
     """
 
     metadata: GroupMetadata
     store_path: StorePath
+    config: GroupConfig
 
     # TODO: make this correct and work
     # TODO: ensure that this can be bound properly to subclass of AsyncGroup
+
+    def __init__(
+        self,
+        metadata: GroupMetadata,
+        store_path: StorePath,
+        config: GroupConfigLike | None = None,
+    ) -> None:
+        config_parsed = parse_group_config(config)
+
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "store_path", store_path)
+        object.__setattr__(self, "config", config_parsed)
 
     @classmethod
     async def from_store(
@@ -469,6 +559,7 @@ class AsyncGroup:
         store: StoreLike,
         zarr_format: ZarrFormat | None = 3,
         use_consolidated: bool | str | None = None,
+        config: GroupConfigLike | None = None,
     ) -> AsyncGroup:
         """Open a new AsyncGroup
 
@@ -574,7 +665,11 @@ class AsyncGroup:
                 maybe_consolidated_metadata_bytes = None
 
             return cls._from_bytes_v2(
-                store_path, zgroup_bytes, zattrs_bytes, maybe_consolidated_metadata_bytes
+                store_path,
+                zgroup_bytes,
+                zattrs_bytes,
+                maybe_consolidated_metadata_bytes,
+                config=config,
             )
         else:
             # V3 groups are comprised of a zarr.json object
@@ -583,9 +678,7 @@ class AsyncGroup:
                 raise TypeError("use_consolidated must be a bool or None for Zarr format 3.")
 
             return cls._from_bytes_v3(
-                store_path,
-                zarr_json_bytes,
-                use_consolidated=use_consolidated,
+                store_path, zarr_json_bytes, use_consolidated=use_consolidated, config=config
             )
 
     @classmethod
@@ -595,6 +688,7 @@ class AsyncGroup:
         zgroup_bytes: Buffer,
         zattrs_bytes: Buffer | None,
         consolidated_metadata_bytes: Buffer | None,
+        config: GroupConfigLike | None,
     ) -> AsyncGroup:
         # V2 groups are comprised of a .zgroup and .zattrs objects
         zgroup = json.loads(zgroup_bytes.to_bytes())
@@ -629,7 +723,7 @@ class AsyncGroup:
                 "must_understand": False,
             }
 
-        return cls.from_dict(store_path, group_metadata)
+        return cls.from_dict(store_path, group_metadata, config)
 
     @classmethod
     def _from_bytes_v3(
@@ -637,6 +731,7 @@ class AsyncGroup:
         store_path: StorePath,
         zarr_json_bytes: Buffer,
         use_consolidated: bool | None,
+        config: GroupConfigLike | None,
     ) -> AsyncGroup:
         group_metadata = json.loads(zarr_json_bytes.to_bytes())
         if use_consolidated and group_metadata.get("consolidated_metadata") is None:
@@ -647,18 +742,13 @@ class AsyncGroup:
             # Drop consolidated metadata if it's there.
             group_metadata.pop("consolidated_metadata", None)
 
-        return cls.from_dict(store_path, group_metadata)
+        return cls.from_dict(store_path, group_metadata, config)
 
     @classmethod
     def from_dict(
-        cls,
-        store_path: StorePath,
-        data: dict[str, Any],
+        cls, store_path: StorePath, data: dict[str, Any], config: GroupConfigLike | None = None
     ) -> AsyncGroup:
-        return cls(
-            metadata=GroupMetadata.from_dict(data),
-            store_path=store_path,
-        )
+        return cls(metadata=GroupMetadata.from_dict(data), store_path=store_path, config=config)
 
     async def setitem(self, key: str, value: Any) -> None:
         """
@@ -908,8 +998,7 @@ class AsyncGroup:
 
     @property
     def read_only(self) -> bool:
-        # Backwards compatibility for 2.x
-        return self.store_path.read_only
+        return self.config.read_only
 
     @property
     def synchronizer(self) -> None:
