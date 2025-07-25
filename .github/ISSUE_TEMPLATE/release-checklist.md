@@ -14,13 +14,16 @@ assignees: ''
 
 - [ ] Priority pull request #X
 
-**Before release**:
+**For minor releases (3.x.0)**:
+
+- [ ] Check [SPEC 0](https://scientific-python.org/specs/spec-0000/#support-window) to see if the minimum supported version of Python or NumPy needs bumping.
+- [ ] Check workarounds/codes/tests are removed. Run `grep "# TODO" **/*.py` to find all potential TODOs.
+
+**For all releases:**:
 
 - [ ] Make sure that all pull requests which will be included in the release have been properly documented as changelog files in the [`changes/` directory](https://github.com/zarr-developers/zarr-python/tree/main/changes).
 - [ ] Run ``towncrier build --version x.y.z`` to create the changelog, and commit the result to the main branch.
-- [ ] Check [SPEC 0](https://scientific-python.org/specs/spec-0000/#support-window) to see if the minimum supported version of Python or NumPy needs bumping.
-- [ ] Check to ensure that:
-  - [ ] Deprecated workarounds/codes/tests are removed. Run `grep "# TODO" **/*.py` to find all potential TODOs.
+- [ ] Check:
   - [ ] All tests pass in the ["Tests" workflow](https://github.com/zarr-developers/zarr-python/actions/workflows/test.yml).
   - [ ] All tests pass in the ["GPU Tests" workflow](https://github.com/zarr-developers/zarr-python/actions/workflows/gpu_test.yml).
   - [ ] All tests pass in the ["Hypothesis" workflow](https://github.com/zarr-developers/zarr-python/actions/workflows/hypothesis.yaml).
